@@ -1,5 +1,5 @@
 (ns leipzig.live
-  (:require [overtone.live :as overtone]
+  (:require [overtone.at-at :as at-at]
             [leipzig.melody :as melody]))
 
 (defmulti play-note
@@ -7,9 +7,11 @@
   e.g. (play-note {:part :bass :time _})"
   :part)
 
+(def time-pool (at-at/mk-pool))
+
 (defn- trickle [[note & others]]
   (when-let [{epoch :time} note]
-    (Thread/sleep (max 0 (- epoch (+ 100 (overtone/now)))))
+    (Thread/sleep (max 0 (- epoch (+ 100 (at-at/now)))))
     (cons note (lazy-seq (trickle others)))))
 
 (def channels (atom []))
@@ -20,12 +22,11 @@
 (defn stop
   "Kills all running melodies.
   e.g. (->> melody play)
-  
+
        ; Later
        (stop)"
   []
   (doseq [channel @channels] (future-cancel channel))
-  (overtone/stop)
   (reset! channels []))
 
 (defn- translate [notes]
@@ -33,25 +34,23 @@
        (melody/after (-> notes first :time -)) ; Allow for notes that lead in.
        (melody/after 0.1) ; Make sure we have time to realise the seq.
        (melody/where :time (partial * 1000))
-       (melody/after (overtone/now))))
+       (melody/after (at-at/now))))
 
 (defn play
   "Plays notes now.
   e.g. (->> melody play)"
-  [notes] 
+  [notes]
   (->>
     notes
     translate
     trickle
     (remove :rest?)
     (map (fn [{epoch :time :as note}]
-           (->> (dissoc note :time)
-                play-note
-                (overtone/at epoch)
-                (when (< (overtone/now) epoch))))) ; Don't play notes in the past.
+           (at-at/at epoch
+                     #(-> note (dissoc :time) play-note)
+                     time-pool)))
     dorun
-    future
-    register))
+    future))
 
 (defn- forever
   "Lazily loop riff forever. riff must start with a positive :time, otherwise there
